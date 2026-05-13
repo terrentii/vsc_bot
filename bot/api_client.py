@@ -90,20 +90,26 @@ class VSCAPIClient:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{self.base_url}/login") as resp:
                 text = await resp.text()
-                csrf_match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', text)
+                # Улучшенный regex — ловит разные кавычки и порядок атрибутов
+                csrf_match = re.search(r'name=["\']csrf_token["\'][^>]*value=["\']([^"\']+)["\']', text)
+                if not csrf_match:
+                    csrf_match = re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']csrf_token["\']', text)
                 csrf_token = csrf_match.group(1) if csrf_match else ""
+            
             data = {
                 "csrf_token": csrf_token,
                 "login": login,
                 "password": password,
             }
+            
             async with session.post(
                 f"{self.base_url}/login",
                 data=data,
                 allow_redirects=False
             ) as resp:
                 location = resp.headers.get('Location', '')
-                return resp.status == 302 and location == '/'
+                # Успех: редирект на / или /room/... (не на /login)
+                return resp.status == 302 and '/login' not in location
 
     async def list_rooms(self) -> List[Dict[str, Any]]:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:

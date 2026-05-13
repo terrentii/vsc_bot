@@ -1,8 +1,9 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class BotStates(StatesGroup):
-    auth_choice = State()           # новое — выбор Войти/Аноним
+    auth_choice = State()
     main_menu = State()
+    account_menu = State()          # новое — меню аккаунта
     waiting_login = State()
     waiting_msg_room = State()
     waiting_msg_text = State()

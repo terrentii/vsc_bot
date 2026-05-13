@@ -8,8 +8,7 @@ from aiogram.fsm.context import FSMContext
 
 from config import Config
 from bot.states import BotStates
-from bot.keyboards import get_auth_keyboard, get_main_menu_keyboard, get_stalk_keyboard, remove_keyboard
-from bot.api_client import api
+from bot.keyboards import get_auth_keyboard, get_main_menu_keyboard, get_stalk_keyboard, get_account_keyboard, get_back_keyboard, get_back_to_start_keyboard, remove_keyboard
 from bot.utils import parse_msg_command, parse_login_command, format_room_list, format_stalk_message
 
 router = Router()
@@ -34,6 +33,10 @@ def _is_room_id(text: str) -> bool:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    info["mode"] = None
+    info["login"] = None
     await state.set_state(BotStates.auth_choice)
     await message.answer(
         Config.WELCOME_TEXT,
@@ -49,8 +52,9 @@ async def btn_auth_login(message: Message, state: FSMContext):
     await message.answer(
         "🔐 <b>Вход в аккаунт</b>\n\n"
         "Введите команду:\n"
-        "<code>/login ваш_логин ваш_пароль</code>",
-        reply_markup=remove_keyboard(),
+        "<code>/login ваш_логин ваш_пароль</code>\n\n"
+        "◀️ Назад — вернуться к выбору",
+        reply_markup=get_back_to_start_keyboard(),
         parse_mode="HTML"
     )
 
@@ -67,6 +71,70 @@ async def btn_auth_anon(message: Message, state: FSMContext):
         "Вы можете отправлять сообщения в любые открытые комнаты.\n"
         "Ваши сообщения будут подписаны как <i>Anon_viaBot</i>.",
         reply_markup=get_main_menu_keyboard(is_logged_in=False),
+        parse_mode="HTML"
+    )
+
+# ==================== /menu ====================
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    is_logged = info["mode"] == "login"
+    await state.set_state(BotStates.main_menu)
+    await message.answer(
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
+        parse_mode="HTML"
+    )
+
+# ==================== ◀️ Назад в /start (из логина) ====================
+
+@router.message(F.text == "◀️ Назад", BotStates.waiting_login)
+async def btn_back_to_start_from_login(message: Message, state: FSMContext):
+    await cmd_start(message, state)
+
+# ==================== ◀️ Назад в меню (из отправки сообщения) ====================
+
+@router.message(F.text == "◀️ Назад", BotStates.waiting_msg_room)
+@router.message(F.text == "◀️ Назад", BotStates.waiting_msg_text)
+async def btn_back_from_msg(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    is_logged = info["mode"] == "login"
+    await state.set_state(BotStates.main_menu)
+    await message.answer(
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
+        parse_mode="HTML"
+    )
+
+# ==================== ◀️ Назад в меню (из отправки медиа) ====================
+
+@router.message(F.text == "◀️ Назад", BotStates.waiting_media_room)
+@router.message(F.text == "◀️ Назад", BotStates.waiting_media)
+async def btn_back_from_media(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    is_logged = info["mode"] == "login"
+    await state.set_state(BotStates.main_menu)
+    await message.answer(
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
+        parse_mode="HTML"
+    )
+
+# ==================== ◀️ Назад в меню (общий) ====================
+
+@router.message(F.text == "◀️ Назад")
+async def btn_back_general(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    is_logged = info["mode"] == "login"
+    await state.set_state(BotStates.main_menu)
+    await message.answer(
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
         parse_mode="HTML"
     )
 
@@ -94,49 +162,57 @@ async def btn_account(message: Message):
         text = "❓ Вы ещё не выбрали режим. Нажмите 🔐 Войти или продолжите как аноним."
     await message.answer(text, parse_mode="HTML")
 
-# ==================== 🔐 Войти (из главного меню) ====================
+# ==================== 👤 Аккаунт ====================
 
-@router.message(F.text == "🔐 Войти")
-async def btn_login_prompt(message: Message, state: FSMContext):
-    await state.set_state(BotStates.waiting_login)
+@router.message(F.text == "👤 Аккаунт")
+async def btn_account(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    
+    if info["mode"] == "login":
+        text = (
+            f"👤 <b>Аккаунт</b>\n\n"
+            f"Логин: <code>{info['login']}</code>\n"
+            f"Режим: зарегистрированный\n"
+            f"Отправка от: <i>{info['login']}_viaBot</i>"
+        )
+        keyboard = get_account_keyboard(is_logged_in=True)
+    elif info["mode"] == "anon":
+        text = (
+            f"👤 <b>Аноним</b>\n\n"
+            f"Режим: анонимный\n"
+            f"Отправка от: <i>Anon_viaBot</i>\n\n"
+            f"💡 Войдите в аккаунт для доступа к закрытым комнатам"
+        )
+        keyboard = get_account_keyboard(is_logged_in=False)
+    else:
+        text = "❓ Вы ещё не выбрали режим."
+        keyboard = get_account_keyboard(is_logged_in=False)
+    
+    await state.set_state(BotStates.account_menu)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+# ==================== Аккаунт — кнопки ====================
+
+@router.message(F.text == "🔐 Войти в аккаунт", BotStates.account_menu)
+async def btn_account_login(message: Message, state: FSMContext):
+    await btn_login_prompt(message, state)
+
+@router.message(F.text == "🚪 Выйти из аккаунта", BotStates.account_menu)
+async def btn_account_logout(message: Message, state: FSMContext):
+    await btn_logout(message, state)
+
+@router.message(F.text == "◀️ Назад", BotStates.account_menu)
+async def btn_account_back(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    is_logged = info["mode"] == "login"
+    await state.set_state(BotStates.main_menu)
     await message.answer(
-        "🔐 <b>Вход в аккаунт</b>\n\n"
-        "Введите команду:\n"
-        "<code>/login ваш_логин ваш_пароль</code>",
-        reply_markup=remove_keyboard(),
+        "🏠 Главное меню",
+        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
         parse_mode="HTML"
     )
-
-@router.message(Command("login"))
-async def cmd_login(message: Message, state: FSMContext):
-    login, password = parse_login_command(message.text)
-    if not login or not password:
-        await message.answer(
-            "❌ Неверный формат.\n"
-            "Используйте: <code>/login логин пароль</code>",
-            parse_mode="HTML"
-        )
-        return
-
-    success = await api.verify_login(login, password)
-    if success:
-        tg_id = message.from_user.id
-        info = get_user_info(tg_id)
-        info["mode"] = "login"
-        info["login"] = login
-        await state.set_state(BotStates.main_menu)
-        await message.answer(
-            f"✅ <b>Вход выполнен!</b>\n\n"
-            f"Аккаунт: <code>{login}</code>\n"
-            f"Сообщения будут от <i>{login}_viaBot</i>.",
-            reply_markup=get_main_menu_keyboard(is_logged_in=True),
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            "❌ <b>Неверный логин или пароль.</b>",
-            parse_mode="HTML"
-        )
 
 # ==================== 🚪 Выйти ====================
 
@@ -165,13 +241,17 @@ async def btn_send_msg_prompt(message: Message, state: FSMContext):
     await state.set_state(BotStates.waiting_msg_room)
     await message.answer(
         "📨 <b>Отправка сообщения</b>\n\n"
-        "Введите ID комнаты (10 цифр):",
-        reply_markup=remove_keyboard(),
+        "Введите ID комнаты (10 цифр):\n\n"
+        "◀️ Назад — отмена",
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
 @router.message(BotStates.waiting_msg_room)
 async def process_msg_room(message: Message, state: FSMContext):
+    if message.text == "◀️ Назад":
+        await btn_back_from_msg(message, state)
+        return
     room_id = message.text.strip()
     if not _is_room_id(room_id):
         await message.answer("❌ ID должен быть 10 цифр. Попробуйте снова:", parse_mode="HTML")
@@ -179,12 +259,17 @@ async def process_msg_room(message: Message, state: FSMContext):
     await state.update_data(msg_room_id=room_id)
     await state.set_state(BotStates.waiting_msg_text)
     await message.answer(
-        f"✏️ Введите сообщение для комнаты <code>{room_id}</code>:",
+        f"✏️ Введите сообщение для комнаты <code>{room_id}</code>:\n\n"
+        "◀️ Назад — отмена",
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
 @router.message(BotStates.waiting_msg_text)
 async def process_msg_text(message: Message, state: FSMContext):
+    if message.text == "◀️ Назад":
+        await btn_back_from_msg(message, state)
+        return
     data = await state.get_data()
     room_id = data.get("msg_room_id")
     text = message.text.strip()
@@ -222,13 +307,17 @@ async def btn_send_media_prompt(message: Message, state: FSMContext):
     await state.set_state(BotStates.waiting_media_room)
     await message.answer(
         "📎 <b>Отправка медиа</b>\n\n"
-        "Введите ID комнаты (10 цифр):",
-        reply_markup=remove_keyboard(),
+        "Введите ID комнаты (10 цифр):\n\n"
+        "◀️ Назад — отмена",
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
 @router.message(BotStates.waiting_media_room)
 async def process_media_room(message: Message, state: FSMContext):
+    if message.text == "◀️ Назад":
+        await btn_back_from_media(message, state)
+        return
     room_id = message.text.strip()
     if not _is_room_id(room_id):
         await message.answer("❌ ID должен быть 10 цифр. Попробуйте снова:", parse_mode="HTML")
@@ -237,7 +326,9 @@ async def process_media_room(message: Message, state: FSMContext):
     await state.set_state(BotStates.waiting_media)
     await message.answer(
         f"📤 Отправьте фото, видео, аудио или документ для комнаты <code>{room_id}</code>:\n"
-        f"Макс. размер: {Config.MAX_MEDIA_SIZE_MB} МБ",
+        f"Макс. размер: {Config.MAX_MEDIA_SIZE_MB} МБ\n\n"
+        "◀️ Назад — отмена",
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
@@ -368,7 +459,7 @@ async def process_stalk_room(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(stalk_room_id=room_id)
     await message.answer(
         f"👁 <b>Слежение за {room_id}</b>\n\n"
-        f"Формат: <code>room_id - sender: message</code>",
+        f"Чтобы прекратить слежку напишите <code>/unstalk {room_id}</code>",
         reply_markup=get_stalk_keyboard(room_id),
         parse_mode="HTML"
     )
@@ -406,7 +497,7 @@ async def btn_roomslist(message: Message):
     text = format_room_list(rooms_sorted, limit)
     await message.answer(text, parse_mode="HTML")
 
-# ==================== 🔍 Поиск комнаты ====================
+# ==================== 🔍 Поиск комнаты (кнопка) ====================
 
 @router.message(F.text == "🔍 Поиск комнаты")
 async def btn_search_prompt(message: Message, state: FSMContext):
@@ -414,13 +505,22 @@ async def btn_search_prompt(message: Message, state: FSMContext):
     await message.answer(
         "🔍 <b>Поиск комнаты</b>\n\n"
         "Введите название комнаты:",
-        reply_markup=remove_keyboard(),
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
-@router.message(BotStates.waiting_search)
-async def process_search(message: Message, state: FSMContext):
-    query = message.text.strip()
+# ==================== /searchroom (команда) ====================
+
+@router.message(Command("searchroom"))
+async def cmd_searchroom(message: Message, state: FSMContext):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        # Без аргумента — как кнопка, переходим в FSM
+        await btn_search_prompt(message, state)
+        return
+    
+    # С аргументом — сразу ищем
+    query = parts[1].strip()
     if query.startswith('"') and query.endswith('"'):
         query = query[1:-1]
     elif query.startswith("'") and query.endswith("'"):
@@ -436,7 +536,6 @@ async def process_search(message: Message, state: FSMContext):
 
     tg_id = message.from_user.id
     info = get_user_info(tg_id)
-    await state.set_state(BotStates.main_menu)
     await message.answer(
         text,
         reply_markup=get_main_menu_keyboard(is_logged_in=(info["mode"] == "login")),
@@ -448,20 +547,6 @@ async def process_search(message: Message, state: FSMContext):
 @router.message(F.text == "❓ Помощь")
 async def btn_help(message: Message):
     await message.answer(Config.HELP_TEXT, parse_mode="HTML")
-
-# ==================== ◀️ Назад ====================
-
-@router.message(F.text == "◀️ Назад")
-async def btn_back(message: Message, state: FSMContext):
-    tg_id = message.from_user.id
-    info = get_user_info(tg_id)
-    is_logged = info["mode"] == "login"
-    await state.set_state(BotStates.main_menu)
-    await message.answer(
-        "🏠 Главное меню",
-        reply_markup=get_main_menu_keyboard(is_logged_in=is_logged),
-        parse_mode="HTML"
-    )
 
 # ==================== Старые команды (совместимость) ====================
 
