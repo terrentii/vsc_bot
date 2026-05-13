@@ -10,6 +10,7 @@ from config import Config
 from bot.states import BotStates
 from bot.keyboards import get_auth_keyboard, get_main_menu_keyboard, get_stalk_keyboard, get_account_keyboard, get_back_keyboard, get_back_to_start_keyboard, remove_keyboard
 from bot.utils import parse_msg_command, parse_login_command, format_room_list, format_stalk_message
+from bot.api_client import api
 
 router = Router()
 
@@ -73,6 +74,38 @@ async def btn_auth_anon(message: Message, state: FSMContext):
         reply_markup=get_main_menu_keyboard(is_logged_in=False),
         parse_mode="HTML"
     )
+
+# ==================== /login ====================
+
+@router.message(Command("login"))
+async def cmd_login(message: Message, state: FSMContext):
+    login, password = parse_login_command(message.text)
+    if not login or not password:
+        await message.answer(
+            "❌ Неверный формат.\nИспользуйте: <code>/login логин пароль</code>",
+            parse_mode="HTML"
+        )
+        return
+    success = await api.verify_login(login, password)
+    if success:
+        tg_id = message.from_user.id
+        info = get_user_info(tg_id)
+        info["mode"] = "login"
+        info["login"] = login
+        await state.set_state(BotStates.main_menu)
+        await message.answer(
+            f"✅ <b>Вход выполнен!</b>\n\n"
+            f"Аккаунт: <code>{login}</code>\n"
+            f"Сообщения будут от <i>{login}_viaBot</i>.",
+            reply_markup=get_main_menu_keyboard(is_logged_in=True),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "❌ <b>Неверный логин или пароль.</b>\n"
+            "Проверьте данные и попробуйте снова.",
+            parse_mode="HTML"
+        )
 
 # ==================== /menu ====================
 
@@ -141,30 +174,6 @@ async def btn_back_general(message: Message, state: FSMContext):
 # ==================== 👤 Аккаунт ====================
 
 @router.message(F.text == "👤 Аккаунт")
-async def btn_account(message: Message):
-    tg_id = message.from_user.id
-    info = get_user_info(tg_id)
-    if info["mode"] == "login":
-        text = (
-            f"👤 <b>Аккаунт</b>\n\n"
-            f"Логин: <code>{info['login']}</code>\n"
-            f"Режим: зарегистрированный\n"
-            f"Отправка от: <i>{info['login']}_viaBot</i>"
-        )
-    elif info["mode"] == "anon":
-        text = (
-            f"👤 <b>Аноним</b>\n\n"
-            f"Режим: анонимный\n"
-            f"Отправка от: <i>Anon_viaBot</i>\n\n"
-            f"💡 Для входа нажмите 🔐 Войти"
-        )
-    else:
-        text = "❓ Вы ещё не выбрали режим. Нажмите 🔐 Войти или продолжите как аноним."
-    await message.answer(text, parse_mode="HTML")
-
-# ==================== 👤 Аккаунт ====================
-
-@router.message(F.text == "👤 Аккаунт")
 async def btn_account(message: Message, state: FSMContext):
     tg_id = message.from_user.id
     info = get_user_info(tg_id)
@@ -196,7 +205,7 @@ async def btn_account(message: Message, state: FSMContext):
 
 @router.message(F.text == "🔐 Войти в аккаунт", BotStates.account_menu)
 async def btn_account_login(message: Message, state: FSMContext):
-    await btn_login_prompt(message, state)
+    await btn_auth_login(message, state)
 
 @router.message(F.text == "🚪 Выйти из аккаунта", BotStates.account_menu)
 async def btn_account_logout(message: Message, state: FSMContext):
@@ -345,14 +354,24 @@ async def process_media(message: Message, state: FSMContext, bot: Bot):
     info = get_user_info(tg_id)
 
     file_obj = None
+    filename = None
+    content_type = None
     if message.photo:
         file_obj = message.photo[-1]
+        filename = f"photo_{file_obj.file_id}.jpg"
+        content_type = "image/jpeg"
     elif message.video:
         file_obj = message.video
+        filename = getattr(file_obj, "file_name", None) or f"video_{file_obj.file_id}.mp4"
+        content_type = getattr(file_obj, "mime_type", "video/mp4")
     elif message.audio:
         file_obj = message.audio
+        filename = getattr(file_obj, "file_name", None) or f"audio_{file_obj.file_id}.mp3"
+        content_type = getattr(file_obj, "mime_type", "audio/mpeg")
     elif message.document:
         file_obj = message.document
+        filename = getattr(file_obj, "file_name", None) or f"file_{file_obj.file_id}.bin"
+        content_type = getattr(file_obj, "mime_type", "application/octet-stream")
 
     if not file_obj:
         await message.answer("❌ Неподдерживаемый тип файла.", parse_mode="HTML")
@@ -369,9 +388,6 @@ async def process_media(message: Message, state: FSMContext, bot: Bot):
         file = await bot.get_file(file_obj.file_id)
         file_data = await bot.download_file(file.file_path)
         file_bytes = file_data.read()
-
-        filename = getattr(file_obj, "file_name", f"file_{file_obj.file_id}")
-        content_type = getattr(file_obj, "mime_type", "application/octet-stream")
 
         success, server_filename = await api.send_media(
             room_id, file_bytes, filename, content_type
@@ -413,7 +429,7 @@ async def btn_stalk_prompt(message: Message, state: FSMContext):
         "👁 <b>Слежение за комнатой</b>\n\n"
         "Введите ID комнаты (10 цифр):\n"
         "Или нажмите ◀️ Назад",
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
 
@@ -493,9 +509,8 @@ async def btn_unstalk(message: Message, state: FSMContext):
 async def btn_roomslist(message: Message):
     rooms = await api.list_rooms()
     rooms_sorted = sorted(rooms, key=lambda x: x.get("created_at", ""), reverse=True)
-    limit = Config.DEFAULT_ROOMS_LIMIT
-    text = format_room_list(rooms_sorted, limit)
-    await message.answer(text, parse_mode="HTML")
+    for part in format_room_list(rooms_sorted, Config.DEFAULT_ROOMS_LIMIT):
+        await message.answer(part, parse_mode="HTML")
 
 # ==================== 🔍 Поиск комнаты (кнопка) ====================
 
@@ -508,6 +523,32 @@ async def btn_search_prompt(message: Message, state: FSMContext):
         reply_markup=get_back_keyboard(),
         parse_mode="HTML"
     )
+
+@router.message(BotStates.waiting_search)
+async def process_search(message: Message, state: FSMContext):
+    if message.text == "◀️ Назад":
+        tg_id = message.from_user.id
+        info = get_user_info(tg_id)
+        await state.set_state(BotStates.main_menu)
+        await message.answer(
+            "🏠 Главное меню",
+            reply_markup=get_main_menu_keyboard(is_logged_in=(info["mode"] == "login")),
+            parse_mode="HTML"
+        )
+        return
+    query = message.text.strip()
+    rooms = await api.list_rooms()
+    found = [r for r in rooms if query.lower() in (r.get("name") or "").lower()]
+    tg_id = message.from_user.id
+    info = get_user_info(tg_id)
+    await state.set_state(BotStates.main_menu)
+    kb = get_main_menu_keyboard(is_logged_in=(info["mode"] == "login"))
+    if not found:
+        await message.answer("😕 Такой комнаты не найдено.", reply_markup=kb, parse_mode="HTML")
+    else:
+        parts = format_room_list(found, 50)
+        for i, part in enumerate(parts):
+            await message.answer(part, reply_markup=(kb if i == len(parts) - 1 else None), parse_mode="HTML")
 
 # ==================== /searchroom (команда) ====================
 
@@ -528,19 +569,15 @@ async def cmd_searchroom(message: Message, state: FSMContext):
 
     rooms = await api.list_rooms()
     found = [r for r in rooms if query.lower() in (r.get("name") or "").lower()]
-
-    if found:
-        text = format_room_list(found, 50)
-    else:
-        text = "😕 Такой комнаты не найдено."
-
     tg_id = message.from_user.id
     info = get_user_info(tg_id)
-    await message.answer(
-        text,
-        reply_markup=get_main_menu_keyboard(is_logged_in=(info["mode"] == "login")),
-        parse_mode="HTML"
-    )
+    kb = get_main_menu_keyboard(is_logged_in=(info["mode"] == "login"))
+    if not found:
+        await message.answer("😕 Такой комнаты не найдено.", reply_markup=kb, parse_mode="HTML")
+    else:
+        parts = format_room_list(found, 50)
+        for i, part in enumerate(parts):
+            await message.answer(part, reply_markup=(kb if i == len(parts) - 1 else None), parse_mode="HTML")
 
 # ==================== ❓ Помощь ====================
 
@@ -621,19 +658,9 @@ async def cmd_unstalk(message: Message, state: FSMContext):
 async def cmd_roomslist(message: Message):
     await btn_roomslist(message)
 
-@router.message(Command("searchroom"))
-async def cmd_searchroom(message: Message, state: FSMContext):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("❌ Укажите название. <code>/searchroom Название</code>", parse_mode="HTML")
-        return
-    await state.set_state(BotStates.waiting_search)
-    message.text = parts[1].strip()
-    await process_search(message, state)
-
 @router.message(Command("account"))
-async def cmd_account(message: Message):
-    await btn_account(message)
+async def cmd_account(message: Message, state: FSMContext):
+    await btn_account(message, state)
 
 @router.message(Command("logout"))
 async def cmd_logout(message: Message, state: FSMContext):

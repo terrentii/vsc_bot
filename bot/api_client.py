@@ -25,18 +25,22 @@ class VSCAPIClient:
         if self.sio:
             try:
                 await self.sio.disconnect()
-            except:
+            except Exception:
                 pass
+
         self.sio = socketio.AsyncClient(
             reconnection=True,
-            reconnection_attempts=5,
-            reconnection_delay=1,
-            reconnection_delay_max=5,
+            reconnection_attempts=10,
+            reconnection_delay=2,
+            reconnection_delay_max=10,
         )
 
         @self.sio.on('connect')
         async def on_connect():
-            print("[WS] Connected")
+            print("[WS] Connected — re-joining rooms:", list(self._callbacks.keys()))
+            # При переподключении переподписываемся на все комнаты
+            for room_id in list(self._callbacks.keys()):
+                await self.sio.emit('join', {'room_id': room_id})
 
         @self.sio.on('disconnect')
         async def on_disconnect():
@@ -44,34 +48,35 @@ class VSCAPIClient:
 
         @self.sio.on('new_message')
         async def on_new_message(data):
-            room_id = data.get('room_id', '')
+            room_id = str(data.get('room_id', ''))
             callback = self._callbacks.get(room_id)
             if callback:
-                await callback(data)
-
-        @self.sio.on('edit_message')
-        async def on_edit_message(data):
-            pass
-
-        @self.sio.on('delete_message')
-        async def on_delete_message(data):
-            pass
+                try:
+                    await callback(data)
+                except Exception as e:
+                    print(f"[WS] Callback error for room {room_id}: {e}")
 
         await self.sio.connect(
             self.base_url,
             headers=self._get_headers(),
-            transports=['websocket', 'polling']
+            transports=['websocket', 'polling'],
+            wait_timeout=10,
         )
 
     async def disconnect_socketio(self):
-        if self.sio and self.sio.connected:
-            await self.sio.disconnect()
+        if self.sio:
+            try:
+                await self.sio.disconnect()
+            except Exception:
+                pass
         self.sio = None
 
     async def join_room_ws(self, room_id: str):
         if self.sio and self.sio.connected:
             await self.sio.emit('join', {'room_id': room_id})
             print(f"[WS] Joined room {room_id}")
+        else:
+            print(f"[WS] Cannot join {room_id}: not connected")
 
     async def leave_room_ws(self, room_id: str):
         if self.sio and self.sio.connected:
@@ -87,33 +92,30 @@ class VSCAPIClient:
 
     async def verify_login(self, login: str, password: str) -> bool:
         import re
+        login_url = f"{self.base_url}/login"
+        post_headers = {
+            "Referer": login_url,
+            "Origin": self.base_url,
+        }
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.base_url}/login") as resp:
+            async with session.get(login_url) as resp:
                 text = await resp.text()
-                # Улучшенный regex — ловит разные кавычки и порядок атрибутов
-                csrf_match = re.search(r'name=["\']csrf_token["\'][^>]*value=["\']([^"\']+)["\']', text)
-                if not csrf_match:
-                    csrf_match = re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']csrf_token["\']', text)
+                csrf_match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', text)
                 csrf_token = csrf_match.group(1) if csrf_match else ""
-            
-            data = {
-                "csrf_token": csrf_token,
-                "login": login,
-                "password": password,
-            }
-            
+
             async with session.post(
-                f"{self.base_url}/login",
-                data=data,
-                allow_redirects=False
+                login_url,
+                data={"csrf_token": csrf_token, "login": login, "password": password},
+                headers=post_headers,
+                allow_redirects=False,
             ) as resp:
-                location = resp.headers.get('Location', '')
-                # Успех: редирект на / или /room/... (не на /login)
-                return resp.status == 302 and '/login' not in location
+                location = resp.headers.get("Location", "")
+                return resp.status == 302 and "/login" not in location
 
     async def list_rooms(self) -> List[Dict[str, Any]]:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
-            async with session.get(f"{self.api_url}/rooms") as resp:
+            url = f"{self.api_url}/rooms/tg" if self.api_key else f"{self.api_url}/rooms"
+            async with session.get(url) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return []
@@ -172,12 +174,17 @@ class VSCAPIClient:
                 content_type=content_type
             )
             async with session.post(
-                f"{self.base_url}/room/{room_id}/upload",
+                f"{self.api_url}/room/{room_id}/upload",
                 data=data
             ) as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     return True, result.get("filename")
+                try:
+                    err_text = await resp.text()
+                    print(f"[Upload Error {resp.status}]: {err_text}")
+                except:
+                    pass
                 return False, None
 
 api = VSCAPIClient()
