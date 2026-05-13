@@ -3,13 +3,11 @@ import socketio
 from typing import Optional, Dict, Any, List, Callable
 from config import Config
 
-
 class VSCAPIClient:
     def __init__(self):
         self.base_url = Config.BASE_URL
         self.api_url = Config.API_URL
         self.api_key = Config.API_KEY
-        
         self.sio: Optional[socketio.AsyncClient] = None
         self._callbacks: Dict[str, Callable] = {}
 
@@ -24,8 +22,17 @@ class VSCAPIClient:
     async def connect_socketio(self):
         if self.sio and self.sio.connected:
             return
-
-        self.sio = socketio.AsyncClient()
+        if self.sio:
+            try:
+                await self.sio.disconnect()
+            except:
+                pass
+        self.sio = socketio.AsyncClient(
+            reconnection=True,
+            reconnection_attempts=5,
+            reconnection_delay=1,
+            reconnection_delay_max=5,
+        )
 
         @self.sio.on('connect')
         async def on_connect():
@@ -59,7 +66,7 @@ class VSCAPIClient:
     async def disconnect_socketio(self):
         if self.sio and self.sio.connected:
             await self.sio.disconnect()
-            self.sio = None
+        self.sio = None
 
     async def join_room_ws(self, room_id: str):
         if self.sio and self.sio.connected:
@@ -79,37 +86,24 @@ class VSCAPIClient:
     # ==================== HTTP API ====================
 
     async def verify_login(self, login: str, password: str) -> bool:
-        """Проверяет логин/пароль через форму входа."""
         import re
-        
         async with aiohttp.ClientSession() as session:
-            # Получаем CSRF-токен
             async with session.get(f"{self.base_url}/login") as resp:
                 text = await resp.text()
                 csrf_match = re.search(r'name="csrf_token"[^>]+value="([^"]+)"', text)
                 csrf_token = csrf_match.group(1) if csrf_match else ""
-            
-            # Логинимся
             data = {
                 "csrf_token": csrf_token,
                 "login": login,
                 "password": password,
             }
-            
             async with session.post(
-                f"{self.base_url}/login", 
-                data=data, 
+                f"{self.base_url}/login",
+                data=data,
                 allow_redirects=False
             ) as resp:
-                # Проверяем куда редиректит
                 location = resp.headers.get('Location', '')
-                
-                # Успех: редирект на /
-                if resp.status == 302 and location == '/':
-                    return True
-                
-                # Ошибка: редирект обратно на /login или другой статус
-                return False
+                return resp.status == 302 and location == '/'
 
     async def list_rooms(self) -> List[Dict[str, Any]]:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
@@ -139,11 +133,9 @@ class VSCAPIClient:
             data = {"text": text}
             if media:
                 data["media"] = media
-            
             headers = dict(self._get_headers())
             if author:
                 headers["X-Bot-Author"] = author
-            
             async with session.post(
                 f"{self.api_url}/room/{room_id}/message",
                 json=data,
@@ -173,7 +165,6 @@ class VSCAPIClient:
                 filename=filename,
                 content_type=content_type
             )
-
             async with session.post(
                 f"{self.base_url}/room/{room_id}/upload",
                 data=data
@@ -182,6 +173,5 @@ class VSCAPIClient:
                     result = await resp.json()
                     return True, result.get("filename")
                 return False, None
-
 
 api = VSCAPIClient()
