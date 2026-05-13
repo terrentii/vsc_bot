@@ -17,12 +17,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 async def main():
     if not Config.BOT_TOKEN:
         logger.error("BOT_TOKEN не найден! Проверьте .env файл.")
         return
-    
+
     bot = Bot(
         token=Config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode="HTML")
@@ -30,15 +29,14 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     dp.include_router(router)
-    
+
     logger.info("🚀 Бот запущен!")
-    
+
     try:
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
         await api.disconnect_socketio()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
