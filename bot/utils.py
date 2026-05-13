@@ -1,3 +1,6 @@
+import html
+
+
 def parse_msg_command(text: str) -> tuple[str | None, str | None]:
     parts = text.split(maxsplit=2)
     if len(parts) < 3:
@@ -8,23 +11,26 @@ def parse_msg_command(text: str) -> tuple[str | None, str | None]:
         return None, None
     return room_id, msg_text
 
+
 def parse_login_command(text: str) -> tuple[str | None, str | None]:
     parts = text.split(maxsplit=2)
     if len(parts) < 3:
         return None, None
     return parts[1].strip(), parts[2].strip()
 
+
 def format_room_list(rooms: list, limit: int = 50) -> list[str]:
-    """Возвращает список сообщений (разбит чтобы не превысить лимит Telegram 4096)."""
     if not rooms:
         return ["😕 Нет доступных комнат."]
+
     entries = []
     for i, room in enumerate(rooms[:limit], 1):
-        name = room.get("name") or room.get("room_id", "???")
-        room_id = room.get("room_id", "???")
+        name = html.escape(room.get("name") or room.get("room_id", "???"))
+        room_id = html.escape(room.get("room_id", "???"))
         created = room.get("created_at", "")[:10]
         entries.append(f"{i}. <b>{name}</b>\n   ID: <code>{room_id}</code> | {created}")
 
+    # Разбиваем на части, чтобы не превысить лимит Telegram в 4096 символов
     parts = []
     current = f"📋 <b>Список комнат ({min(len(rooms), limit)}):</b>\n\n"
     for entry in entries:
@@ -37,11 +43,12 @@ def format_room_list(rooms: list, limit: int = 50) -> list[str]:
         parts.append(current.rstrip())
     return parts
 
+
 def format_stalk_message(room_id: str, data: dict) -> str:
-    author = data.get("author", "???")
-    text = data.get("text", "")
-    media = data.get("media", "")
-    msg = f"👁 <code>{room_id}</code> — <b>{author}</b>:"
+    author = html.escape(data.get("author", "???"))
+    text   = html.escape(data.get("text", ""))
+    media  = html.escape(data.get("media", ""))
+    msg = f"👁 <code>{html.escape(room_id)}</code> — <b>{author}</b>:"
     if text:
         msg += f"\n{text}"
     if media:

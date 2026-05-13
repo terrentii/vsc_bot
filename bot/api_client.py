@@ -1,7 +1,10 @@
+import re
 import aiohttp
 import socketio
 from typing import Optional, Dict, Any, List, Callable
+
 from config import Config
+
 
 class VSCAPIClient:
     def __init__(self):
@@ -16,8 +19,6 @@ class VSCAPIClient:
         if self.api_key:
             headers["X-Api-Key"] = self.api_key
         return headers
-
-    # ==================== SOCKET.IO ====================
 
     async def connect_socketio(self):
         if self.sio and self.sio.connected:
@@ -35,31 +36,31 @@ class VSCAPIClient:
             reconnection_delay_max=10,
         )
 
-        @self.sio.on('connect')
+        @self.sio.on("connect")
         async def on_connect():
-            print("[WS] Connected — re-joining rooms:", list(self._callbacks.keys()))
-            # При переподключении переподписываемся на все комнаты
+            # При переподключении нужно заново вступить во все комнаты
+            print("[WS] Подключено, переподписываемся на комнаты:", list(self._callbacks.keys()))
             for room_id in list(self._callbacks.keys()):
-                await self.sio.emit('join', {'room_id': room_id})
+                await self.sio.emit("join", {"room_id": room_id})
 
-        @self.sio.on('disconnect')
+        @self.sio.on("disconnect")
         async def on_disconnect():
-            print("[WS] Disconnected")
+            print("[WS] Отключено")
 
-        @self.sio.on('new_message')
+        @self.sio.on("new_message")
         async def on_new_message(data):
-            room_id = str(data.get('room_id', ''))
+            room_id = str(data.get("room_id", ""))
             callback = self._callbacks.get(room_id)
             if callback:
                 try:
                     await callback(data)
                 except Exception as e:
-                    print(f"[WS] Callback error for room {room_id}: {e}")
+                    print(f"[WS] Ошибка колбека для комнаты {room_id}: {e}")
 
         await self.sio.connect(
             self.base_url,
             headers=self._get_headers(),
-            transports=['websocket', 'polling'],
+            transports=["websocket", "polling"],
             wait_timeout=10,
         )
 
@@ -73,14 +74,14 @@ class VSCAPIClient:
 
     async def join_room_ws(self, room_id: str):
         if self.sio and self.sio.connected:
-            await self.sio.emit('join', {'room_id': room_id})
-            print(f"[WS] Joined room {room_id}")
+            await self.sio.emit("join", {"room_id": room_id})
+            print(f"[WS] Вошли в комнату {room_id}")
         else:
-            print(f"[WS] Cannot join {room_id}: not connected")
+            print(f"[WS] Не удалось войти в {room_id}: нет соединения")
 
     async def leave_room_ws(self, room_id: str):
         if self.sio and self.sio.connected:
-            await self.sio.emit('leave', {'room_id': room_id})
+            await self.sio.emit("leave", {"room_id": room_id})
 
     def on_message(self, room_id: str, callback: Callable):
         self._callbacks[room_id] = callback
@@ -88,20 +89,15 @@ class VSCAPIClient:
     def off_message(self, room_id: str):
         self._callbacks.pop(room_id, None)
 
-    # ==================== HTTP API ====================
-
     async def verify_login(self, login: str, password: str) -> bool:
-        import re
         login_url = f"{self.base_url}/login"
-        post_headers = {
-            "Referer": login_url,
-            "Origin": self.base_url,
-        }
+        # Flask проверяет Referer/Origin — без них возвращает 400
+        post_headers = {"Referer": login_url, "Origin": self.base_url}
         async with aiohttp.ClientSession() as session:
             async with session.get(login_url) as resp:
                 text = await resp.text()
-                csrf_match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', text)
-                csrf_token = csrf_match.group(1) if csrf_match else ""
+                match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', text)
+                csrf_token = match.group(1) if match else ""
 
             async with session.post(
                 login_url,
@@ -124,7 +120,7 @@ class VSCAPIClient:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
             async with session.get(
                 f"{self.api_url}/room/{room_id}/messages",
-                params={"after": after}
+                params={"after": after},
             ) as resp:
                 if resp.status == 200:
                     return await resp.json()
@@ -135,26 +131,25 @@ class VSCAPIClient:
         room_id: str,
         text: str,
         author: Optional[str] = None,
-        media: Optional[str] = None
+        media: Optional[str] = None,
     ) -> tuple[bool, Optional[Dict]]:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
-            data = {"text": text}
+            body = {"text": text}
             if media:
-                data["media"] = media
+                body["media"] = media
             headers = dict(self._get_headers())
             if author:
                 headers["X-Bot-Author"] = author
             async with session.post(
                 f"{self.api_url}/room/{room_id}/message",
-                json=data,
-                headers=headers
+                json=body,
+                headers=headers,
             ) as resp:
                 if resp.status == 201:
                     return True, await resp.json()
                 try:
-                    err_text = await resp.text()
-                    print(f"[API Error {resp.status}]: {err_text}")
-                except:
+                    print(f"[API] Ошибка {resp.status}: {await resp.text()}")
+                except Exception:
                     pass
                 return False, None
 
@@ -163,28 +158,23 @@ class VSCAPIClient:
         room_id: str,
         file_data: bytes,
         filename: str,
-        content_type: str
+        content_type: str,
     ) -> tuple[bool, Optional[str]]:
         async with aiohttp.ClientSession(headers=self._get_headers()) as session:
-            data = aiohttp.FormData()
-            data.add_field(
-                "file",
-                file_data,
-                filename=filename,
-                content_type=content_type
-            )
+            form = aiohttp.FormData()
+            form.add_field("file", file_data, filename=filename, content_type=content_type)
             async with session.post(
                 f"{self.api_url}/room/{room_id}/upload",
-                data=data
+                data=form,
             ) as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     return True, result.get("filename")
                 try:
-                    err_text = await resp.text()
-                    print(f"[Upload Error {resp.status}]: {err_text}")
-                except:
+                    print(f"[API] Ошибка загрузки {resp.status}: {await resp.text()}")
+                except Exception:
                     pass
                 return False, None
+
 
 api = VSCAPIClient()
