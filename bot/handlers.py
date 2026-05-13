@@ -342,8 +342,9 @@ async def process_media(message: Message, state: FSMContext, bot: Bot):
         success, server_filename = await api.send_media(room_id, file_bytes, filename, content_type)
 
         if success:
+            caption = data.get("media_caption") or ""
             msg_success, _ = await api.send_message(
-                room_id, "📎 Медиа", author=get_display_name(tg_id), media=server_filename
+                room_id, caption, author=get_display_name(tg_id), media=server_filename
             )
             if msg_success:
                 await status_msg.edit_text(
@@ -510,9 +511,11 @@ async def cmd_msg(message: Message):
 
 @router.message(Command("media"))
 async def cmd_media(message: Message, state: FSMContext):
-    parts = message.text.split(maxsplit=1)
+    parts = message.text.split(maxsplit=2)
     if len(parts) < 2:
-        await message.answer("❌ Укажите ID комнаты. <code>/media 1234567890</code>", parse_mode="HTML")
+        await message.answer(
+            "❌ Укажите ID комнаты. <code>/media 1234567890 подпись</code>", parse_mode="HTML"
+        )
         return
     room_id = parts[1].strip()
     if not _is_room_id(room_id):
@@ -522,7 +525,8 @@ async def cmd_media(message: Message, state: FSMContext):
     if not info["mode"]:
         await message.answer("❌ Сначала выберите режим.", parse_mode="HTML")
         return
-    await state.update_data(media_room_id=room_id)
+    caption = parts[2].strip() if len(parts) >= 3 else ""
+    await state.update_data(media_room_id=room_id, media_caption=caption)
     await state.set_state(BotStates.waiting_media)
     await message.answer(f"📎 Отправьте медиа для комнаты <code>{room_id}</code>:", parse_mode="HTML")
 
